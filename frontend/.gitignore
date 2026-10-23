@@ -1,0 +1,14 @@
+node_modules/
+.expo/
+dist/
+web-build/
+.env
+*.jks
+*.keystore
+*.mobileprovision
+.DS_Store
+
+# Local Android signing files
+android/app/*.keystore
+android/app/*.jks
+android/local.properties

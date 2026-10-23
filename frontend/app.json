@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "StudySmart AI",
+    "slug": "studysmart-ai",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "studysmartai",
+    "userInterfaceStyle": "light",
+    "android": {
+      "package": "com.group9.studysmartai"
+    },
+    "ios": {
+      "bundleIdentifier": "com.group9.studysmartai",
+      "supportsTablet": true
+    },
+    "plugins": ["expo-notifications"]
+  }
+}
