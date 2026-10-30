@@ -12,6 +12,8 @@ export type AcademicTask = {
   difficulty: number;
   estimatedMinutes: number;
   status: TaskStatus;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type User = {

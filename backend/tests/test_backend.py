@@ -1,6 +1,8 @@
 from datetime import date, datetime, timezone
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.main import app
 from app.database import DatabaseStore
@@ -33,7 +35,11 @@ def test_json_store_crud_and_user_isolation(tmp_path) -> None:
     assert store.list_tasks("user-b") == []
     assert store.get_task("user-a", created.id).title == "Study algorithms"
 
-    updated = store.update_task("user-a", created.id, TaskUpdate(title="Study graph algorithms"))
+    updated = store.update_task(
+        "user-a",
+        created.id,
+        TaskUpdate(title="Study graph algorithms"),
+    )
 
     assert updated.title == "Study graph algorithms"
     assert updated.updated_at >= created.updated_at
@@ -43,11 +49,15 @@ def test_json_store_crud_and_user_isolation(tmp_path) -> None:
     assert store.list_tasks("user-a") == []
 
 
-def test_local_scheduler_honors_time_window_and_deadline(monkeypatch, tmp_path) -> None:
+def test_local_scheduler_honors_time_window_and_deadline(
+    monkeypatch,
+    tmp_path,
+) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     store = JsonStore(tmp_path / "store.json")
     task = store.create_task("student", task_payload())
+
     preferences = SchedulePreferences(
         planningStart=date(2030, 1, 2),
         planningDays=3,
@@ -58,25 +68,61 @@ def test_local_scheduler_honors_time_window_and_deadline(monkeypatch, tmp_path) 
         timezone="Africa/Johannesburg",
     )
 
-    schedule = generate_schedule("student", [task], preferences)
+    schedule = generate_schedule(
+        "student",
+        [task],
+        preferences,
+    )
 
     assert schedule.source.value == "local_fallback"
-    assert sum(session.duration_minutes for session in schedule.sessions) == 90
-    assert all(session.start_at.time() >= preferences.daily_start for session in schedule.sessions)
-    assert all(session.end_at.time() <= preferences.daily_end for session in schedule.sessions)
-    assert all(session.end_at <= task.due_at for session in schedule.sessions)
+
+    assert (
+        sum(
+            session.duration_minutes
+            for session in schedule.sessions
+        )
+        == 90
+    )
+
+    assert all(
+        session.start_at.time() >= preferences.daily_start
+        for session in schedule.sessions
+    )
+
+    assert all(
+        session.end_at.time() <= preferences.daily_end
+        for session in schedule.sessions
+    )
+
+    assert all(
+        session.end_at <= task.due_at
+        for session in schedule.sessions
+    )
 
 
-def test_api_serializes_frontend_field_names(monkeypatch, tmp_path) -> None:
+def test_api_serializes_frontend_field_names(
+    monkeypatch,
+    tmp_path,
+) -> None:
     from app import main
 
-    monkeypatch.setattr(main, "store", JsonStore(tmp_path / "api-store.json"))
+    monkeypatch.setattr(
+        main,
+        "store",
+        JsonStore(tmp_path / "api-store.json"),
+    )
 
     client = TestClient(app)
+
     response = client.post(
         "/tasks",
-        json=task_payload().model_dump(mode="json", by_alias=True),
-        headers={"X-User-ID": "mobile-user"},
+        json=task_payload().model_dump(
+            mode="json",
+            by_alias=True,
+        ),
+        headers={
+            "X-User-ID": "mobile-user",
+        },
     )
 
     assert response.status_code == 201
@@ -84,7 +130,12 @@ def test_api_serializes_frontend_field_names(monkeypatch, tmp_path) -> None:
     body = response.json()
 
     assert body["estimatedMinutes"] == 90
-    assert "dueAt" in body and "createdAt" in body and "updatedAt" in body
+
+    assert (
+        "dueAt" in body
+        and "createdAt" in body
+        and "updatedAt" in body
+    )
 
     schedule_response = client.post(
         "/schedule/generate",
@@ -95,19 +146,27 @@ def test_api_serializes_frontend_field_names(monkeypatch, tmp_path) -> None:
             "dailyEnd": "19:00",
             "timezone": "Africa/Johannesburg",
         },
-        headers={"X-User-ID": "mobile-user"},
+        headers={
+            "X-User-ID": "mobile-user",
+        },
     )
 
     assert schedule_response.status_code == 200
-    assert schedule_response.json()["sessions"][0]["taskId"] == body["id"]
+
+    assert (
+        schedule_response.json()["sessions"][0]["taskId"]
+        == body["id"]
+    )
 
 
 def test_local_scheduler_reports_work_that_cannot_fit_before_deadline(
-    monkeypatch, tmp_path
+    monkeypatch,
+    tmp_path,
 ) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     store = JsonStore(tmp_path / "store.json")
+
     task = store.create_task(
         "student",
         task_payload(
@@ -115,6 +174,7 @@ def test_local_scheduler_reports_work_that_cannot_fit_before_deadline(
             estimatedMinutes=30,
         ),
     )
+
     preferences = SchedulePreferences(
         planningStart=date(2030, 1, 2),
         planningDays=1,
@@ -123,23 +183,54 @@ def test_local_scheduler_reports_work_that_cannot_fit_before_deadline(
         timezone="Africa/Johannesburg",
     )
 
-    schedule = generate_schedule("student", [task], preferences)
+    schedule = generate_schedule(
+        "student",
+        [task],
+        preferences,
+    )
 
     assert schedule.sessions == []
-    assert any("still needs 30 minute(s)" in warning for warning in schedule.warnings)
+
+    assert any(
+        "still needs 30 minute(s)" in warning
+        for warning in schedule.warnings
+    )
 
 
-def test_database_store_is_ready_for_postgres(monkeypatch, tmp_path) -> None:
+def test_database_store_is_ready_for_postgres(
+    monkeypatch,
+    tmp_path,
+) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    database_path = (tmp_path / "studysmart.db").as_posix()
-    store = DatabaseStore(f"sqlite+pysqlite:///{database_path}")
-    task = store.create_task("railway-user", task_payload())
+    database_path = (
+        tmp_path / "studysmart.db"
+    ).as_posix()
+
+    store = DatabaseStore(
+        f"sqlite+pysqlite:///{database_path}"
+    )
+
+    task = store.create_task(
+        "railway-user",
+        task_payload(),
+    )
 
     assert store.list_tasks("another-user") == []
-    assert store.get_task("railway-user", task.id).title == "Study algorithms"
 
-    updated = store.update_task("railway-user", task.id, TaskUpdate(status="IN_PROGRESS"))
+    assert (
+        store.get_task(
+            "railway-user",
+            task.id,
+        ).title
+        == "Study algorithms"
+    )
+
+    updated = store.update_task(
+        "railway-user",
+        task.id,
+        TaskUpdate(status="IN_PROGRESS"),
+    )
 
     assert updated.status.value == "IN_PROGRESS"
 
@@ -155,10 +246,116 @@ def test_database_store_is_ready_for_postgres(monkeypatch, tmp_path) -> None:
         ),
     )
 
-    store.save_schedule("railway-user", schedule)
+    store.save_schedule(
+        "railway-user",
+        schedule,
+    )
 
-    latest = store.latest_schedule("railway-user")
+    latest = store.latest_schedule(
+        "railway-user"
+    )
 
     assert latest is not None
     assert latest.id == schedule.id
-    assert sum(item.duration_minutes for item in latest.sessions) == 90
+
+    assert (
+        sum(
+            item.duration_minutes
+            for item in latest.sessions
+        )
+        == 90
+    )
+
+
+def test_local_scheduler_never_creates_sessions_in_the_past(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.delenv(
+        "OPENAI_API_KEY",
+        raising=False,
+    )
+
+    fixed_now = datetime(
+        2030,
+        1,
+        2,
+        13,
+        3,
+        tzinfo=timezone.utc,
+    )
+
+    def fake_planning_now(zone):
+        return fixed_now.astimezone(zone)
+
+    monkeypatch.setattr(
+        "app.scheduler._planning_now",
+        fake_planning_now,
+    )
+
+    store = JsonStore(
+        tmp_path / "store.json"
+    )
+
+    task = store.create_task(
+        "student",
+        task_payload(
+            dueAt="2030-01-02T18:00:00+02:00",
+            estimatedMinutes=60,
+        ),
+    )
+
+    preferences = SchedulePreferences(
+        planningStart=date(2030, 1, 2),
+        planningDays=1,
+        dailyStart="10:00",
+        dailyEnd="19:00",
+        sessionMinutes=30,
+        breakMinutes=10,
+        timezone="Africa/Johannesburg",
+    )
+
+    schedule = generate_schedule(
+        "student",
+        [task],
+        preferences,
+    )
+
+    assert schedule.sessions
+
+    current_local_time = fixed_now.astimezone(
+        schedule.sessions[0].start_at.tzinfo
+    )
+
+    assert all(
+        session.start_at >= current_local_time
+        for session in schedule.sessions
+    )
+
+    assert (
+        schedule.sessions[0].start_at.hour
+        >= 15
+    )
+
+
+def test_task_creation_rejects_past_due_date() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="dueAt must be in the future",
+    ):
+        TaskCreate(
+            title="Past task",
+            module="TEST",
+            dueAt="2020-01-01T12:00:00+02:00",
+            estimatedMinutes=60,
+        )
+
+
+def test_task_update_rejects_past_due_date() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="dueAt must be in the future",
+    ):
+        TaskUpdate(
+            dueAt="2020-01-01T12:00:00+02:00",
+        )
