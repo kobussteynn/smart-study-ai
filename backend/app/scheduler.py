@@ -31,7 +31,9 @@ class IncompleteScheduleError(InvalidScheduleError):
 
 def _active_tasks(tasks: Iterable[TaskRecord]) -> list[TaskRecord]:
     return [
-        task for task in tasks if task.status not in {TaskStatus.COMPLETED, TaskStatus.CANCELLED}
+        task
+        for task in tasks
+        if task.status not in {TaskStatus.COMPLETED, TaskStatus.CANCELLED}
     ]
 
 
@@ -39,10 +41,15 @@ def _planning_start(preferences: SchedulePreferences) -> date:
     if preferences.planning_start:
         return preferences.planning_start
 
-    return datetime.now(get_timezone(preferences.timezone)).date()
+    return datetime.now(
+        get_timezone(preferences.timezone)
+    ).date()
 
 
-def _task_due_in_zone(task: TaskRecord, zone) -> datetime:
+def _task_due_in_zone(
+    task: TaskRecord,
+    zone,
+) -> datetime:
     due_at = task.due_at
 
     if due_at.tzinfo is None:
@@ -51,7 +58,28 @@ def _task_due_in_zone(task: TaskRecord, zone) -> datetime:
     return due_at.astimezone(zone)
 
 
-def _busy_intervals(preferences: SchedulePreferences, day: date) -> list[tuple[datetime, datetime]]:
+def _planning_now(zone) -> datetime:
+    """
+    Return the current time rounded forward to the next whole minute.
+
+    This prevents a newly generated study session from beginning a few
+    seconds before the schedule generation request finishes.
+    """
+    current = datetime.now(zone)
+
+    if current.second or current.microsecond:
+        current = current.replace(
+            second=0,
+            microsecond=0,
+        ) + timedelta(minutes=1)
+
+    return current
+
+
+def _busy_intervals(
+    preferences: SchedulePreferences,
+    day: date,
+) -> list[tuple[datetime, datetime]]:
     """Occupied intervals on a planning date in the requested planning timezone.
 
     Includes events begun on prior dates (overnight) and neighboring dates
@@ -59,8 +87,19 @@ def _busy_intervals(preferences: SchedulePreferences, day: date) -> list[tuple[d
     """
 
     zone = get_timezone(preferences.timezone)
-    day_start = datetime.combine(day, datetime.min.time(), tzinfo=zone)
-    day_end = datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=zone)
+
+    day_start = datetime.combine(
+        day,
+        datetime.min.time(),
+        tzinfo=zone,
+    )
+
+    day_end = datetime.combine(
+        day + timedelta(days=1),
+        datetime.min.time(),
+        tzinfo=zone,
+    )
+
     intervals: list[tuple[datetime, datetime]] = []
 
     for event in preferences.routine_events:
@@ -69,34 +108,89 @@ def _busy_intervals(preferences: SchedulePreferences, day: date) -> list[tuple[d
         for offset in (-2, -1, 0, 1, 2):
             origin = day + timedelta(days=offset)
 
-            if event.repeat == "once" and not event.date <= origin <= (
-                event.end_date or event.date
+            if (
+                event.repeat == "once"
+                and not event.date
+                <= origin
+                <= (event.end_date or event.date)
             ):
                 continue
-            if event.repeat == "selected" and origin.isoweekday() % 7 not in event.days_of_week:
+
+            if (
+                event.repeat == "selected"
+                and origin.isoweekday() % 7
+                not in event.days_of_week
+            ):
                 continue
 
-            start_time = datetime.min.time() if event.all_day else event.start_time
-            end_time = datetime.min.time() if event.all_day else event.end_time
-            start = datetime.combine(origin, start_time, tzinfo=event_zone)
-            end_date = origin + timedelta(days=event.all_day or end_time <= start_time)
-            end = datetime.combine(end_date, end_time, tzinfo=event_zone)
+            start_time = (
+                datetime.min.time()
+                if event.all_day
+                else event.start_time
+            )
 
+            end_time = (
+                datetime.min.time()
+                if event.all_day
+                else event.end_time
+            )
 
-            start = start.astimezone(timezone.utc).astimezone(zone)
-            end = end.astimezone(timezone.utc).astimezone(zone)
+            start = datetime.combine(
+                origin,
+                start_time,
+                tzinfo=event_zone,
+            )
+
+            end_date = origin + timedelta(
+                days=event.all_day
+                or end_time <= start_time
+            )
+
+            end = datetime.combine(
+                end_date,
+                end_time,
+                tzinfo=event_zone,
+            )
+
+            start = (
+                start
+                .astimezone(timezone.utc)
+                .astimezone(zone)
+            )
+
+            end = (
+                end
+                .astimezone(timezone.utc)
+                .astimezone(zone)
+            )
 
             if start < day_end and end > day_start:
-                intervals.append((max(day_start, start), min(day_end, end)))
+                intervals.append(
+                    (
+                        max(day_start, start),
+                        min(day_end, end),
+                    )
+                )
 
-    intervals.sort(key=lambda pair: pair[0].astimezone(timezone.utc))
+    intervals.sort(
+        key=lambda pair: pair[0].astimezone(
+            timezone.utc
+        )
+    )
 
     merged: list[tuple[datetime, datetime]] = []
 
     for start, end in intervals:
-        if merged and start <= merged[-1][1]:
+        if (
+            merged
+            and start <= merged[-1][1]
+        ):
             last_start, last_end = merged[-1]
-            merged[-1] = (last_start, max(last_end, end))
+
+            merged[-1] = (
+                last_start,
+                max(last_end, end),
+            )
         else:
             merged.append((start, end))
 
@@ -111,8 +205,14 @@ def _local_schedule(
     warning: str | None = None,
 ) -> StudySchedule:
     zone = get_timezone(preferences.timezone)
+    now = _planning_now(zone)
     start_date = _planning_start(preferences)
-    task_map = {task.id: task for task in _active_tasks(tasks)}
+
+    task_map = {
+        task.id: task
+        for task in _active_tasks(tasks)
+    }
+
     ordered = sorted(
         task_map.values(),
         key=lambda task: (
@@ -121,57 +221,128 @@ def _local_schedule(
             -task.difficulty,
         ),
     )
-    remaining = {task.id: task.estimated_minutes for task in ordered}
+
+    remaining = {
+        task.id: task.estimated_minutes
+        for task in ordered
+    }
+
     sessions: list[StudySession] = []
 
-    for offset in range(preferences.planning_days):
-        day = start_date + timedelta(days=offset)
+    for offset in range(
+        preferences.planning_days
+    ):
+        day = start_date + timedelta(
+            days=offset
+        )
+
+        # Never generate sessions on dates that
+        # have already passed.
+        if day < now.date():
+            continue
 
         if day in preferences.unavailable_dates:
             continue
 
-        cursor = datetime.combine(day, preferences.daily_start, tzinfo=zone)
-        day_end = datetime.combine(day, preferences.daily_end, tzinfo=zone)
-        busy = _busy_intervals(preferences, day)
+        cursor = datetime.combine(
+            day,
+            preferences.daily_start,
+            tzinfo=zone,
+        )
+
+        day_end = datetime.combine(
+            day,
+            preferences.daily_end,
+            tzinfo=zone,
+        )
+
+        # If the schedule is being generated for
+        # today, never start before the current time.
+        if day == now.date():
+            cursor = max(cursor, now)
+
+        # Today's study window may already be over.
+        if cursor >= day_end:
+            continue
+
+        busy = _busy_intervals(
+            preferences,
+            day,
+        )
+
         blocked_task_ids: set[str] = set()
 
         while cursor < day_end:
-
-            occupying = next(((start, end) for start, end in busy if start <= cursor < end), None)
+            occupying = next(
+                (
+                    (start, end)
+                    for start, end in busy
+                    if start <= cursor < end
+                ),
+                None,
+            )
 
             if occupying is not None:
                 cursor = occupying[1]
-
                 continue
 
-            next_busy = next((start for start, _ in busy if start > cursor), day_end)
+            next_busy = next(
+                (
+                    start
+                    for start, _ in busy
+                    if start > cursor
+                ),
+                day_end,
+            )
+
             candidates = [
                 task
                 for task in ordered
-                if task.id not in blocked_task_ids
-                and remaining[task.id] > 0
-                and cursor < _task_due_in_zone(task, zone)
+                if (
+                    task.id
+                    not in blocked_task_ids
+                    and remaining[task.id] > 0
+                    and cursor
+                    < _task_due_in_zone(
+                        task,
+                        zone,
+                    )
+                )
             ]
 
             if not candidates:
                 break
 
             task = candidates[0]
-            due_at = _task_due_in_zone(task, zone)
-            available_end = min(day_end, due_at, next_busy)
-            available_minutes = int((available_end - cursor).total_seconds() // 60)
+
+            due_at = _task_due_in_zone(
+                task,
+                zone,
+            )
+
+            available_end = min(
+                day_end,
+                due_at,
+                next_busy,
+            )
+
+            available_minutes = int(
+                (
+                    available_end
+                    - cursor
+                ).total_seconds()
+                // 60
+            )
 
             if available_minutes < 15:
                 if available_end == day_end:
                     break
+
                 if available_end == next_busy:
-
                     cursor = next_busy
-
                     continue
 
                 blocked_task_ids.add(task.id)
-
                 continue
 
             duration = min(
@@ -179,7 +350,10 @@ def _local_schedule(
                 remaining[task.id],
                 available_minutes,
             )
-            end_at = cursor + timedelta(minutes=duration)
+
+            end_at = cursor + timedelta(
+                minutes=duration
+            )
 
             sessions.append(
                 StudySession(
@@ -190,30 +364,48 @@ def _local_schedule(
                     startAt=cursor,
                     endAt=end_at,
                     durationMinutes=duration,
-                    focus=f"Work on {task.title}",
+                    focus=(
+                        f"Work on {task.title}"
+                    ),
                 )
             )
 
             remaining[task.id] -= duration
-            cursor = end_at + timedelta(minutes=preferences.break_minutes)
 
-    warnings = [warning] if warning else []
+            cursor = (
+                end_at
+                + timedelta(
+                    minutes=preferences.break_minutes
+                )
+            )
+
+    warnings = (
+        [warning]
+        if warning
+        else []
+    )
 
     for task in ordered:
         if remaining[task.id] > 0:
             warnings.append(
-                f"{task.title} still needs {remaining[task.id]} minute(s); add availability or reduce workload."
+                f"{task.title} still needs "
+                f"{remaining[task.id]} minute(s); "
+                "add availability or reduce workload."
             )
 
     return StudySchedule(
         id=str(uuid4()),
         userId=user_id,
-        generatedAt=datetime.now(timezone.utc),
+        generatedAt=datetime.now(
+            timezone.utc
+        ),
         source=ScheduleSource.LOCAL_FALLBACK,
         model=model,
         summary=(
-            f"Created {len(sessions)} study session(s) across "
-            f"{preferences.planning_days} planning day(s)."
+            f"Created {len(sessions)} "
+            "study session(s) across "
+            f"{preferences.planning_days} "
+            "planning day(s)."
         ),
         sessions=sessions,
         warnings=warnings,
@@ -228,59 +420,200 @@ def _validate_ai_draft(
     draft: AIScheduleDraft,
     model: str,
 ) -> StudySchedule:
-    zone = get_timezone(preferences.timezone)
-    start_date = _planning_start(preferences)
-    last_date = start_date + timedelta(days=preferences.planning_days - 1)
-    task_map = {task.id: task for task in _active_tasks(tasks)}
-    scheduled_minutes: defaultdict[str, int] = defaultdict(int)
+    zone = get_timezone(
+        preferences.timezone
+    )
+
+    now = _planning_now(zone)
+
+    start_date = _planning_start(
+        preferences
+    )
+
+    last_date = (
+        start_date
+        + timedelta(
+            days=preferences.planning_days - 1
+        )
+    )
+
+    task_map = {
+        task.id: task
+        for task in _active_tasks(tasks)
+    }
+
+    scheduled_minutes: defaultdict[
+        str,
+        int,
+    ] = defaultdict(int)
+
     converted: list[StudySession] = []
     warnings: list[str] = []
 
-    for item in sorted(draft.sessions, key=lambda session: session.start_at):
-        task = task_map.get(item.task_id)
+    for item in sorted(
+        draft.sessions,
+        key=lambda session: session.start_at,
+    ):
+        task = task_map.get(
+            item.task_id
+        )
 
         if task is None:
-            raise InvalidScheduleError(f"Unknown task ID: {item.task_id}")
+            raise InvalidScheduleError(
+                f"Unknown task ID: "
+                f"{item.task_id}"
+            )
 
         start_at = item.start_at
         end_at = item.end_at
 
-        if start_at.tzinfo is None or end_at.tzinfo is None:
-            raise InvalidScheduleError("All session timestamps must include a timezone")
+        if (
+            start_at.tzinfo is None
+            or end_at.tzinfo is None
+        ):
+            raise InvalidScheduleError(
+                "All session timestamps "
+                "must include a timezone"
+            )
 
-        start_at = start_at.astimezone(zone)
-        end_at = end_at.astimezone(zone)
-        duration = int((end_at - start_at).total_seconds() // 60)
+        start_at = start_at.astimezone(
+            zone
+        )
 
-        if duration < 1 or duration > preferences.session_minutes:
-            raise InvalidScheduleError("Session duration is outside the configured range")
-        if not start_date <= start_at.date() <= last_date:
-            raise InvalidScheduleError("Session is outside the planning period")
-        if start_at.date() in preferences.unavailable_dates:
-            raise InvalidScheduleError("Session occurs on an unavailable date")
-        if end_at.date() != start_at.date():
-            raise InvalidScheduleError("Study sessions must end on their start date")
-        if start_at.time().replace(tzinfo=None) < preferences.daily_start:
-            raise InvalidScheduleError("Session starts before daily availability")
-        if end_at.time().replace(tzinfo=None) > preferences.daily_end:
-            raise InvalidScheduleError("Session ends after daily availability")
-        if end_at > _task_due_in_zone(task, zone):
-            raise InvalidScheduleError("Session ends after its task deadline")
+        end_at = end_at.astimezone(
+            zone
+        )
 
-        remaining_minutes = task.estimated_minutes - scheduled_minutes[task.id]
+        # AI-generated study sessions must
+        # never start earlier than now.
+        if start_at < now:
+            raise InvalidScheduleError(
+                "Session starts in the past"
+            )
+
+        duration = int(
+            (
+                end_at
+                - start_at
+            ).total_seconds()
+            // 60
+        )
+
+        if (
+            duration < 1
+            or duration
+            > preferences.session_minutes
+        ):
+            raise InvalidScheduleError(
+                "Session duration is outside "
+                "the configured range"
+            )
+
+        if not (
+            start_date
+            <= start_at.date()
+            <= last_date
+        ):
+            raise InvalidScheduleError(
+                "Session is outside "
+                "the planning period"
+            )
+
+        if (
+            start_at.date()
+            in preferences.unavailable_dates
+        ):
+            raise InvalidScheduleError(
+                "Session occurs on "
+                "an unavailable date"
+            )
+
+        if (
+            end_at.date()
+            != start_at.date()
+        ):
+            raise InvalidScheduleError(
+                "Study sessions must end "
+                "on their start date"
+            )
+
+        if (
+            start_at.time().replace(
+                tzinfo=None
+            )
+            < preferences.daily_start
+        ):
+            raise InvalidScheduleError(
+                "Session starts before "
+                "daily availability"
+            )
+
+        if (
+            end_at.time().replace(
+                tzinfo=None
+            )
+            > preferences.daily_end
+        ):
+            raise InvalidScheduleError(
+                "Session ends after "
+                "daily availability"
+            )
+
+        if (
+            end_at
+            > _task_due_in_zone(
+                task,
+                zone,
+            )
+        ):
+            raise InvalidScheduleError(
+                "Session ends after "
+                "its task deadline"
+            )
+
+        remaining_minutes = (
+            task.estimated_minutes
+            - scheduled_minutes[task.id]
+        )
 
         if remaining_minutes <= 0:
             continue
+
         if duration > remaining_minutes:
             duration = remaining_minutes
-            end_at = start_at + timedelta(minutes=duration)
 
-            warnings.append(f"Trimmed excess time for {task.title} to match its estimate.")
-        for busy_start, busy_end in _busy_intervals(preferences, start_at.date()):
-            if start_at < busy_end and end_at > busy_start:
-                raise InvalidScheduleError("AI session overlaps a routine event")
+            end_at = (
+                start_at
+                + timedelta(
+                    minutes=duration
+                )
+            )
 
-        scheduled_minutes[task.id] += duration
+            warnings.append(
+                f"Trimmed excess time for "
+                f"{task.title} to match "
+                "its estimate."
+            )
+
+        for (
+            busy_start,
+            busy_end,
+        ) in _busy_intervals(
+            preferences,
+            start_at.date(),
+        ):
+            if (
+                start_at < busy_end
+                and end_at > busy_start
+            ):
+                raise InvalidScheduleError(
+                    "AI session overlaps "
+                    "a routine event"
+                )
+
+        scheduled_minutes[
+            task.id
+        ] += duration
 
         converted.append(
             StudySession(
@@ -295,32 +628,68 @@ def _validate_ai_draft(
             )
         )
 
-    for previous, current in zip(converted, converted[1:]):
-        required_start = previous.end_at + timedelta(minutes=preferences.break_minutes)
+    for (
+        previous,
+        current,
+    ) in zip(
+        converted,
+        converted[1:],
+    ):
+        required_start = (
+            previous.end_at
+            + timedelta(
+                minutes=preferences.break_minutes
+            )
+        )
 
-        if current.start_at < required_start:
-            raise InvalidScheduleError("Sessions overlap or omit the configured break")
+        if (
+            current.start_at
+            < required_start
+        ):
+            raise InvalidScheduleError(
+                "Sessions overlap or omit "
+                "the configured break"
+            )
 
     for task in task_map.values():
-        missing = task.estimated_minutes - scheduled_minutes[task.id]
+        missing = (
+            task.estimated_minutes
+            - scheduled_minutes[task.id]
+        )
 
         if missing > 0:
-            warnings.append(f"{task.title} still needs {missing} minute(s).")
+            warnings.append(
+                f"{task.title} still needs "
+                f"{missing} minute(s)."
+            )
 
     local_capacity = sum(
         session.duration_minutes
         for session in _local_schedule(
-            user_id, list(task_map.values()), preferences, model=None
+            user_id,
+            list(task_map.values()),
+            preferences,
+            model=None,
         ).sessions
     )
 
-    if sum(scheduled_minutes.values()) < local_capacity:
-        raise IncompleteScheduleError("The AI schedule omitted study time that fits")
+    if (
+        sum(
+            scheduled_minutes.values()
+        )
+        < local_capacity
+    ):
+        raise IncompleteScheduleError(
+            "The AI schedule omitted "
+            "study time that fits"
+        )
 
     return StudySchedule(
         id=str(uuid4()),
         userId=user_id,
-        generatedAt=datetime.now(timezone.utc),
+        generatedAt=datetime.now(
+            timezone.utc
+        ),
         source=ScheduleSource.OPENAI,
         model=model,
         summary=draft.summary,
@@ -338,72 +707,142 @@ def _ai_schedule(
     model: str,
 ) -> StudySchedule:
     active = _active_tasks(tasks)
-    start_date = _planning_start(preferences)
-    zone = get_timezone(preferences.timezone)
-    baseline = _local_schedule(user_id, active, preferences, model=None)
+
+    start_date = _planning_start(
+        preferences
+    )
+
+    zone = get_timezone(
+        preferences.timezone
+    )
+
+    now = _planning_now(zone)
+
+    baseline = _local_schedule(
+        user_id,
+        active,
+        preferences,
+        model=None,
+    )
+
     blocked_intervals = []
 
-    for offset in range(preferences.planning_days):
-        day = start_date + timedelta(days=offset)
+    for offset in range(
+        preferences.planning_days
+    ):
+        day = (
+            start_date
+            + timedelta(days=offset)
+        )
 
-        if day in preferences.unavailable_dates:
+        if (
+            day
+            in preferences.unavailable_dates
+        ):
             intervals = [
                 (
-                    datetime.combine(day, datetime.min.time(), tzinfo=zone),
-                    datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=zone),
+                    datetime.combine(
+                        day,
+                        datetime.min.time(),
+                        tzinfo=zone,
+                    ),
+                    datetime.combine(
+                        day
+                        + timedelta(days=1),
+                        datetime.min.time(),
+                        tzinfo=zone,
+                    ),
                 )
             ]
         else:
-            intervals = _busy_intervals(preferences, day)
+            intervals = _busy_intervals(
+                preferences,
+                day,
+            )
 
         blocked_intervals.extend(
-            {"startAt": start.isoformat(), "endAt": end.isoformat()} for start, end in intervals
+            {
+                "startAt": start.isoformat(),
+                "endAt": end.isoformat(),
+            }
+            for start, end in intervals
         )
 
     payload = {
         "timezone": preferences.timezone,
+        "currentTime": now.isoformat(),
         "planningStart": start_date.isoformat(),
         "planningDays": preferences.planning_days,
         "dailyStart": preferences.daily_start.isoformat(),
         "dailyEnd": preferences.daily_end.isoformat(),
         "sessionMinutes": preferences.session_minutes,
         "breakMinutes": preferences.break_minutes,
-        "unavailableDates": [day.isoformat() for day in preferences.unavailable_dates],
+        "unavailableDates": [
+            day.isoformat()
+            for day
+            in preferences.unavailable_dates
+        ],
         "routineEvents": [
-            event.model_dump(mode="json", by_alias=True) for event in preferences.routine_events
+            event.model_dump(
+                mode="json",
+                by_alias=True,
+            )
+            for event
+            in preferences.routine_events
         ],
         "blockedIntervals": blocked_intervals,
-        "tasks": [task.model_dump(mode="json", by_alias=True) for task in active],
-        "totalRequiredMinutes": sum(task.estimated_minutes for task in active),
+        "tasks": [
+            task.model_dump(
+                mode="json",
+                by_alias=True,
+            )
+            for task
+            in active
+        ],
+        "totalRequiredMinutes": sum(
+            task.estimated_minutes
+            for task
+            in active
+        ),
         "feasibleSessions": [
             {
                 "task_id": session.task_id,
-                "start_at": session.start_at.isoformat(),
-                "end_at": session.end_at.isoformat(),
-                "durationMinutes": session.duration_minutes,
+                "start_at": (
+                    session.start_at.isoformat()
+                ),
+                "end_at": (
+                    session.end_at.isoformat()
+                ),
+                "durationMinutes": (
+                    session.duration_minutes
+                ),
             }
-            for session in baseline.sessions
+            for session
+            in baseline.sessions
         ],
     }
+
     instructions = (
         "Create a practical study schedule from the supplied tasks and availability. "
         "Use only supplied task IDs. Prioritize near deadlines, then priority and difficulty. "
         "Split long tasks across sessions, never exceed each task's estimatedMinutes, and "
-        "do not schedule after dueAt. Use timezone-aware ISO 8601 timestamps. Keep sessions "
-        "inside the planning period and daily window, honor unavailable dates and breaks. "
-        "Treat all routineEvents as occupied, respecting their repeat rules, "
-        "selected weekdays (Sunday=0), timezones, and overnight events. "
+        "do not schedule after dueAt. Use timezone-aware ISO 8601 timestamps. "
+        "Never schedule a study session before currentTime. "
+        "Keep sessions inside the planning period and daily window, honor unavailable "
+        "dates and breaks. Treat all routineEvents as occupied, respecting their repeat "
+        "rules, selected weekdays (Sunday=0), timezones, and overnight events. "
         "blockedIntervals contains the exact occupied intervals in the planning timezone, "
         "including unavailable dates and expanded recurring events. Never place any part "
         "of a study session inside these intervals. A session may end exactly when a "
         "blocked interval starts or start exactly when it ends. "
         "State any workload that cannot fit in warnings. When capacity exists, schedule "
         "exactly each task's estimatedMinutes. Before answering, add the session durations "
-        "for each task ID and verify they equal that task's estimate."
-        " feasibleSessions is a complete, constraint-checked starting timetable. "
+        "for each task ID and verify they equal that task's estimate. "
+        "feasibleSessions is a complete, constraint-checked starting timetable. "
         "Use it as the starting point and provide specific study guidance in focus. "
         "Never reduce the amount of study time it allocates."
     )
+
     request_body = {
         "model": model,
         "instructions": instructions,
@@ -413,64 +852,129 @@ def _ai_schedule(
                 "type": "json_schema",
                 "name": "study_schedule",
                 "strict": True,
-                "schema": AIScheduleDraft.model_json_schema(),
+                "schema": (
+                    AIScheduleDraft
+                    .model_json_schema()
+                ),
             }
         },
         "store": False,
     }
 
-    with httpx.Client(timeout=45.0) as client:
+    with httpx.Client(
+        timeout=45.0
+    ) as client:
         response = client.post(
             "https://api.openai.com/v1/responses",
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers={
+                "Authorization": (
+                    f"Bearer {api_key}"
+                )
+            },
             json=request_body,
         )
 
     response.raise_for_status()
 
     response_body = response.json()
+
     output_text = next(
         (
             content["text"]
-            for output in response_body.get("output", [])
-            for content in output.get("content", [])
-            if content.get("type") == "output_text" and content.get("text")
+            for output
+            in response_body.get(
+                "output",
+                [],
+            )
+            for content
+            in output.get(
+                "content",
+                [],
+            )
+            if (
+                content.get("type")
+                == "output_text"
+                and content.get("text")
+            )
         ),
         None,
     )
 
     if output_text is None:
-        raise InvalidScheduleError("The model did not return a schedule")
+        raise InvalidScheduleError(
+            "The model did not return "
+            "a schedule"
+        )
 
-    draft = AIScheduleDraft.model_validate_json(output_text)
+    draft = (
+        AIScheduleDraft
+        .model_validate_json(
+            output_text
+        )
+    )
 
     try:
-        return _validate_ai_draft(user_id, active, preferences, draft, model)
+        return _validate_ai_draft(
+            user_id,
+            active,
+            preferences,
+            draft,
+            model,
+        )
+
     except IncompleteScheduleError:
+        focuses = {
+            item.task_id: item.focus
+            for item in draft.sessions
+        }
 
-
-        focuses = {item.task_id: item.focus for item in draft.sessions}
-        repaired = AIScheduleDraft.model_validate(
-            {
-                "summary": draft.summary,
-                "warnings": [],
-                "sessions": [
-                    {
-                        "task_id": session.task_id,
-                        "start_at": session.start_at,
-                        "end_at": session.end_at,
-                        "focus": focuses.get(session.task_id, session.focus),
-                    }
-                    for session in baseline.sessions
-                ],
-            }
+        repaired = (
+            AIScheduleDraft
+            .model_validate(
+                {
+                    "summary": draft.summary,
+                    "warnings": [],
+                    "sessions": [
+                        {
+                            "task_id": (
+                                session.task_id
+                            ),
+                            "start_at": (
+                                session.start_at
+                            ),
+                            "end_at": (
+                                session.end_at
+                            ),
+                            "focus": focuses.get(
+                                session.task_id,
+                                session.focus,
+                            ),
+                        }
+                        for session
+                        in baseline.sessions
+                    ],
+                }
+            )
         )
-        result = _validate_ai_draft(user_id, active, preferences, repaired, model)
+
+        result = _validate_ai_draft(
+            user_id,
+            active,
+            preferences,
+            repaired,
+            model,
+        )
+
         result.summary = (
-            "AI-guided study plan with session times adjusted to cover the available workload."
+            "AI-guided study plan with "
+            "session times adjusted to cover "
+            "the available workload."
         )
 
-        result.warnings.append("Adjusted session times to include all study time that fits.")
+        result.warnings.append(
+            "Adjusted session times to "
+            "include all study time that fits."
+        )
 
         return result
 
@@ -481,12 +985,24 @@ def generate_schedule(
     preferences: SchedulePreferences,
 ) -> StudySchedule:
     active = _active_tasks(tasks)
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+    model = os.getenv(
+        "OPENAI_MODEL",
+        "gpt-4o-mini",
+    )
 
     if not active:
-        return _local_schedule(user_id, [], preferences, model=None)
+        return _local_schedule(
+            user_id,
+            [],
+            preferences,
+            model=None,
+        )
 
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    api_key = os.getenv(
+        "OPENAI_API_KEY",
+        "",
+    ).strip()
 
     if not api_key:
         return _local_schedule(
@@ -494,17 +1010,34 @@ def generate_schedule(
             active,
             preferences,
             model=None,
-            warning="OPENAI_API_KEY is not configured; used the local scheduler.",
+            warning=(
+                "OPENAI_API_KEY is not configured; "
+                "used the local scheduler."
+            ),
         )
+
     try:
-        return _ai_schedule(user_id, active, preferences, api_key, model)
+        return _ai_schedule(
+            user_id,
+            active,
+            preferences,
+            api_key,
+            model,
+        )
+
     except Exception as exc:
-        reason = f"{type(exc).__name__}: {exc}".rstrip(": ")
+        reason = (
+            f"{type(exc).__name__}: {exc}"
+        ).rstrip(": ")
 
         return _local_schedule(
             user_id,
             active,
             preferences,
             model=model,
-            warning=f"AI schedule generation failed; used the local scheduler ({reason}).",
+            warning=(
+                "AI schedule generation failed; "
+                "used the local scheduler "
+                f"({reason})."
+            ),
         )

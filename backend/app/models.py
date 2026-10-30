@@ -67,7 +67,19 @@ class TaskBase(ApiModel):
 
 
 class TaskCreate(TaskBase):
-    pass
+    @field_validator("due_at")
+    @classmethod
+    def due_date_must_be_future(cls, value: datetime) -> datetime:
+        comparable = (
+            value.astimezone(timezone.utc)
+            if value.tzinfo is not None
+            else value.replace(tzinfo=timezone.utc)
+        )
+
+        if comparable <= datetime.now(timezone.utc):
+            raise ValueError("dueAt must be in the future")
+
+        return value
 
 
 class TaskUpdate(ApiModel):
@@ -77,8 +89,33 @@ class TaskUpdate(ApiModel):
     due_at: datetime | None = Field(default=None, alias="dueAt")
     priority: Priority | None = None
     difficulty: int | None = Field(default=None, ge=1, le=5)
-    estimated_minutes: int | None = Field(default=None, alias="estimatedMinutes", ge=1, le=100_000)
+    estimated_minutes: int | None = Field(
+        default=None,
+        alias="estimatedMinutes",
+        ge=1,
+        le=100_000,
+    )
     status: TaskStatus | None = None
+
+    @field_validator("due_at")
+    @classmethod
+    def due_date_must_be_future(
+        cls,
+        value: datetime | None,
+    ) -> datetime | None:
+        if value is None:
+            return value
+
+        comparable = (
+            value.astimezone(timezone.utc)
+            if value.tzinfo is not None
+            else value.replace(tzinfo=timezone.utc)
+        )
+
+        if comparable <= datetime.now(timezone.utc):
+            raise ValueError("dueAt must be in the future")
+
+        return value
 
     @model_validator(mode="after")
     def require_change(self) -> "TaskUpdate":

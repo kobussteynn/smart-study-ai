@@ -43,11 +43,23 @@ export function TaskFormScreen({ navigation, route }: Props) {
 
     const parsedDate = parseTaskDate(dueDate);
 
-    if (!parsedDate) {
-      Alert.alert('Invalid date', 'Enter a valid date or choose one from the calendar.');
+if (!parsedDate) {
+  Alert.alert(
+    'Invalid date',
+    'Enter a valid date or choose one from the calendar.',
+  );
 
-      return;
-    }
+  return;
+}
+
+if (parsedDate.getTime() <= Date.now()) {
+  Alert.alert(
+    'Invalid due date',
+    'The due date must be in the future.',
+  );
+
+  return;
+}
     if (!Number.isFinite(estimatedMinutes) || estimatedMinutes <= 0) {
       Alert.alert('Invalid study time', 'Estimated minutes must be greater than zero.');
 
